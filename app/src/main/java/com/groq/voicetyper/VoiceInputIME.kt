@@ -50,6 +50,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
     private val errorHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate() {
+        savedStateRegistryController.performAttach()
         savedStateRegistryController.performRestore(null)
         super.onCreate()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
@@ -59,7 +60,14 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
     override fun onCreateInputView(): View {
         val composeView = ComposeView(this)
 
-        // Set lifecycle and VM store owners on the Compose View for correct tree resolution
+        // Set lifecycle and VM store owners on the Window DecorView for correct tree resolution
+        window?.window?.decorView?.let { decorView ->
+            decorView.setViewTreeLifecycleOwner(this)
+            decorView.setViewTreeViewModelStoreOwner(this)
+            decorView.setViewTreeSavedStateRegistryOwner(this)
+        }
+
+        // Set owners on the Compose View as well to be absolutely safe
         composeView.setViewTreeLifecycleOwner(this)
         composeView.setViewTreeViewModelStoreOwner(this)
         composeView.setViewTreeSavedStateRegistryOwner(this)
