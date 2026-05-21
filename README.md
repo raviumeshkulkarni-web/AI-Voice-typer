@@ -1,10 +1,22 @@
 # AI Voice Typer for Android 🎙️🚀
 
+[![Build Android APK](https://github.com/raviumeshkulkarni-web/AI-Voice-typer/actions/workflows/build.yml/badge.svg)](https://github.com/raviumeshkulkarni-web/AI-Voice-typer/actions/workflows/build.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/raviumeshkulkarni-web/AI-Voice-typer?color=blue)](https://github.com/raviumeshkulkarni-web/AI-Voice-typer/releases)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Platform](https://img.shields.io/badge/Platform-Android%20API%2026%2B-brightgreen.svg)](https://developer.android.com)
+[![Kotlin](https://img.shields.io/badge/Kotlin-1.9.23-orange.svg)](https://kotlinlang.org)
+
 AI Voice Typer is a lightweight, modern, and privacy-focused Android Voice Keyboard (IME) powered by the ultra-fast **Groq Whisper API**. It lets you dictate directly into any application's text fields at blistering speeds.
+
+<p align="center">
+  <img src="docs/assets/setup_screenshot.png" width="30%" alt="Setup Screen Mockup" />
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/assets/keyboard_screenshot.png" width="30%" alt="Keyboard Mockup" />
+</p>
 
 ---
 
-## 🔒 The Privacy-First Non-negotiable approach
+## 🔒 The Privacy-First Approach
 
 **Built for users who love and demand absolute privacy.** 
 
@@ -36,15 +48,56 @@ Unlike conventional voice typing tools and keyboards, **Groq Voice Typer does no
 
 ---
 
+## Technical Architecture
+
+The following sequence diagram outlines the end-to-end data flow when voice typing:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant IME as IMEScreen (UI)
+    participant Service as VoiceInputIME
+    participant Recorder as AudioRecorder
+    participant API as GroqClient
+
+    User->>IME: Tap / Hold Voice Button
+    IME->>Service: onStartRecording()
+    Service->>Recorder: startRecording()
+    Note over Recorder: Captures MIC audio &<br/>polls amplitudes for waveform
+
+    Recorder-->>IME: Stream Amplitudes (StateFlow)
+    Note over IME: Draw real-time dynamic waveform
+
+    User->>IME: Release / Tap Voice Button again
+    IME->>Service: onStopRecording()
+    Service->>Recorder: stopRecording()
+    Recorder-->>Service: Return audio cache File (.m4a)
+    Service->>IME: Update state to TRANSCRIBING
+
+    Service->>API: transcribe(audioFile)
+    Note over API: Send Multipart POST request<br/>to Groq Whisper API
+    API-->>Service: Return JSON Transcription Result
+    Note over API: Clean up audio cache File
+
+    alt Success
+        Service->>Service: Commit text to current input field
+        Service->>IME: Update state to IDLE
+    else Failure
+        Service->>IME: Show Error Message (e.g. rate limit, api key issue)
+        Note over IME: Reset back to IDLE after 4s
+    end
+```
+
+---
+
 ## How to Install & Build
 
-### Option A: Build in the Cloud (No local installation needed)
+### Option A: Download the Pre-compiled APK (Recommended)
 
-1. **Fork/Clone** this repository to your GitHub account.
-2. Go to the **Actions** tab of your repository on GitHub.
-3. Click on the completed **Build Android APK** workflow run.
-4. Under the **Artifacts** section at the bottom, click **GroqVoiceTyper-APK** to download the zip file.
-5. Extract the zip and install the `app-debug.apk` directly on your Android phone!
+1. Navigate to the [Releases](https://github.com/raviumeshkulkarni-web/AI-Voice-typer/releases) page of this repository.
+2. Download the `app-release.apk` asset from the latest release.
+3. Open the APK on your Android device and install it (you may need to allow installation from "Unknown Sources" or your web browser).
 
 ### Option B: Build Locally via Android Studio
 
@@ -67,6 +120,22 @@ After installing the app, follow these simple steps inside the configuration wiz
 3. **Enable Keyboard Service** in Android System Settings.
 4. **Switch Default Keyboard** to make **Groq Voice Typer** your active input method.
 5. Practice and test typing directly within the app's **Practice Area** text field!
+
+---
+
+## 🛠️ Troubleshooting
+
+### 1. The keyboard shows "API Key Required" even though I entered it
+* Make sure you clicked the **Save** button in the main setup screen. The API key is stored securely using cryptography only after you click Save.
+* Try reopening the Setup app to confirm that the screen displays `✓ Key saved securely`.
+
+### 2. The keyboard voice button does not react to taps or holds
+* Verify that you have enabled microphone permissions for Groq Voice Typer in the Setup app or under Android system settings: `Settings > Apps > Groq Voice Typer > Permissions > Microphone > Allow`.
+
+### 3. Transcription fails with a red error message
+* **Rate Limits**: Groq's free tier has rate limits. If you record very frequently, you might temporarily hit rate limits.
+* **Internet Connection**: The app requires an active internet connection to communicate directly and securely with the Groq API.
+* **Invalid API Key**: Ensure there are no trailing spaces or missing characters in your pasted API key.
 
 ---
 

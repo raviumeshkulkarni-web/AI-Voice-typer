@@ -1,0 +1,49 @@
+name: Publish Android Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout project
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3
+
+    - name: Generate Gradle Wrapper
+      run: gradle wrapper --gradle-version 8.4
+
+    - name: Build Release APK
+      run: ./gradlew assembleRelease
+
+    - name: Sign Release APK
+      run: |
+        keytool -genkeypair -v -keystore release.keystore -alias release-key -keyalg RSA -keysize 2048 -validity 10000 -storepass password123 -keypass password123 -dname "CN=GroqVoiceTyper, O=OpenSource, C=US"
+        APKSIGNER=$(find $ANDROID_HOME/build-tools/ -name "apksigner" | head -n 1)
+        UNSIGNED_APK=$(find app/build/outputs/apk/release/ -name "*-unsigned.apk" | head -n 1)
+        $APKSIGNER sign --ks release.keystore --ks-key-alias release-key --ks-pass pass:password123 --key-pass pass:password123 --out app-release.apk $UNSIGNED_APK
+
+    - name: Create Release and Upload Asset
+      uses: softprops/action-gh-release@v2
+      with:
+        files: app-release.apk
+        name: Release ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
