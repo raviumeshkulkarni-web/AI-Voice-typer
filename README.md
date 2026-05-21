@@ -4,7 +4,7 @@ Groq Voice Typer is a lightweight, modern, and privacy-focused Android Voice Key
 
 ---
 
-## 🔒 The Privacy-First USP (Unique Selling Proposition)
+## 🔒 The Privacy-First Non-negotiable approach
 
 **Built for users who love and demand absolute privacy.** 
 
