@@ -1,5 +1,6 @@
 package com.groq.voicetyper
 
+import android.content.Context
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
@@ -9,6 +10,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -49,6 +51,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
     // Re-created in onCreate to ensure a fresh scope after destroy/re-create cycles
     private lateinit var scope: CoroutineScope
     private lateinit var audioRecorder: AudioRecorder
+    private lateinit var composeView: ComposeView
 
     // IME State
     private var apiKey by mutableStateOf<String?>(null)
@@ -59,6 +62,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
     // Backspace Swipe-to-Delete state
     private var initialCursorPos = -1
     private var swipeSelectLength = 0
+    private var swipeTextBefore = ""
 
     private fun getCharsForWords(text: String, wordCount: Int): Int {
         if (text.isEmpty() || wordCount <= 0) return 0
@@ -98,7 +102,29 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
 
     override fun onCreateInputView(): View {
         Log.d(TAG, "onCreateInputView: Creating Compose input view")
-        val composeView = ComposeView(this)
+        composeView = ComposeView(this)
+
+        // Set the window background to transparent so the app behind is visible around the floating pill
+        window?.window?.let { win ->
+            win.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                win.addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+                win.navigationBarColor = android.graphics.Color.TRANSPARENT
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                win.isNavigationBarContrastEnforced = false
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                win.setDecorFitsSystemWindows(false)
+            } else {
+                @Suppress("DEPRECATION")
+                win.decorView.systemUiVisibility = (
+                    win.decorView.systemUiVisibility
+                    or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                )
+            }
+        }
 
         // Set lifecycle and VM store owners on the Window DecorView for correct tree resolution
         window?.window?.decorView?.let { decorView ->
@@ -117,16 +143,25 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
                 audioRecorder = audioRecorder,
                 apiKey = apiKey,
                 onBackspace = {
-                    currentInputConnection?.deleteSurroundingText(1, 0)
+                    val conn = currentInputConnection
+                    if (conn != null) {
+                        val selectedText = conn.getSelectedText(0)
+                        if (!selectedText.isNullOrEmpty()) {
+                            conn.commitText("", 1)
+                        } else {
+                            conn.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+                            conn.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+                        }
+                    }
                 },
                 onBackspaceSelect = { words ->
                     val conn = currentInputConnection ?: return@IMEScreen
                     if (initialCursorPos == -1) {
                         val extracted = conn.getExtractedText(ExtractedTextRequest(), 0)
                         initialCursorPos = extracted?.selectionStart ?: -1
+                        swipeTextBefore = conn.getTextBeforeCursor(300, 0)?.toString() ?: ""
                     }
-                    val textBefore = conn.getTextBeforeCursor(300, 0)?.toString() ?: ""
-                    val lengthToSelect = getCharsForWords(textBefore, words)
+                    val lengthToSelect = getCharsForWords(swipeTextBefore, words)
                     swipeSelectLength = lengthToSelect
                     if (initialCursorPos != -1 && lengthToSelect > 0) {
                         val start = (initialCursorPos - lengthToSelect).coerceAtLeast(0)
@@ -140,6 +175,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
                     }
                     initialCursorPos = -1
                     swipeSelectLength = 0
+                    swipeTextBefore = ""
                 },
                 onBackspaceCancelSelect = {
                     val conn = currentInputConnection
@@ -148,15 +184,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
                     }
                     initialCursorPos = -1
                     swipeSelectLength = 0
-                },
-                onSpace = {
-                    currentInputConnection?.commitText(" ", 1)
-                },
-                onEnter = {
-                    currentInputConnection?.let { conn ->
-                        conn.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
-                        conn.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
-                    }
+                    swipeTextBefore = ""
                 },
                 recordingState = recordingState,
                 errorMessage = errorMessage,
@@ -178,9 +206,6 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
                         recordingState = RecordingState.IDLE
                     }
                 },
-                onDismiss = {
-                    requestHideSelf(0)
-                },
                 onSwitchKeyboard = {
                     val token = window?.window?.attributes?.token
                     if (token != null) {
@@ -198,6 +223,57 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
             )
         }
         return composeView
+    }
+
+    override fun onComputeInsets(outInsets: Insets?) {
+        super.onComputeInsets(outInsets)
+        if (outInsets == null) return
+
+        if (!::composeView.isInitialized) return
+        val windowHeight = composeView.height
+        if (windowHeight <= 0) return
+
+        val displayMetrics = resources.displayMetrics
+        val density = displayMetrics.density
+
+        val pillWidth = (240 * density).toInt()
+        val pillHeight = (64 * density).toInt()
+        val windowWidth = displayMetrics.widthPixels
+
+        val left = (windowWidth - pillWidth) / 2
+        val right = (windowWidth + pillWidth) / 2
+
+        // The top of the pill bar is estimated from the bottom.
+        // We add some margin for safety (e.g. 16dp bottom padding + 64dp pill height)
+        val bottomMargin = (16 * density).toInt()
+        val isStatusVisible = recordingState != RecordingState.IDLE || errorMessage != null
+        val topOffset = if (isStatusVisible) {
+            (48 * density).toInt()
+        } else {
+            0
+        }
+
+        // Get actual navigation bar height since the window now layouts under it
+        val insetsBottom = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            composeView.rootWindowInsets?.getInsets(android.view.WindowInsets.Type.navigationBars())?.bottom
+        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            @Suppress("DEPRECATION")
+            composeView.rootWindowInsets?.stableInsetBottom
+        } else {
+            null
+        }
+        val navBarHeight = insetsBottom ?: run {
+            val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+            if (resourceId > 0) resources.getDimensionPixelSize(resourceId) else 0
+        }
+
+        val top = windowHeight - navBarHeight - pillHeight - bottomMargin - topOffset
+        val bottom = windowHeight - navBarHeight
+
+        val rect = android.graphics.Rect(left, top.coerceAtLeast(0), right, bottom.coerceAtLeast(0))
+
+        outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_REGION
+        outInsets.touchableRegion.set(rect)
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {

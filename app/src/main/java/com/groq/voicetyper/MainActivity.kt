@@ -50,6 +50,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import android.net.Uri
+import android.os.Build
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,6 +71,8 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "Microphone permission is required for voice typing", Toast.LENGTH_LONG).show()
         }
     }
+
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,7 +102,9 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SetupScreen(onRequestPermission: () -> Unit) {
+fun SetupScreen(
+    onRequestPermission: () -> Unit
+) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
     
@@ -104,6 +112,7 @@ fun SetupScreen(onRequestPermission: () -> Unit) {
     var hasMicPermission by remember { mutableStateOf(false) }
     var isKeyboardEnabled by remember { mutableStateOf(false) }
     var isKeyboardSelected by remember { mutableStateOf(false) }
+
     
     // Load and store API Key state
     var apiKeyInput by remember { mutableStateOf("") }
@@ -130,6 +139,8 @@ fun SetupScreen(onRequestPermission: () -> Unit) {
                 context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD
             ) ?: ""
             isKeyboardSelected = selectedImeId.contains(pkgName)
+
+
             
             delay(1500)
         }
@@ -339,7 +350,7 @@ fun SetupScreen(onRequestPermission: () -> Unit) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 24.dp),
+                .padding(bottom = 16.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
             shape = RoundedCornerShape(16.dp)
         ) {
