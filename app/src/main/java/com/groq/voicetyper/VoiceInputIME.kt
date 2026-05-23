@@ -7,6 +7,8 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedTextRequest
+import android.view.inputmethod.InputConnection
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -54,8 +56,38 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
     private var errorMessage by mutableStateOf<String?>(null)
     private val errorHandler = Handler(Looper.getMainLooper())
 
+    // Backspace Swipe-to-Delete state
+    private var initialCursorPos = -1
+    private var swipeSelectLength = 0
+
+    private fun getCharsForWords(text: String, wordCount: Int): Int {
+        if (text.isEmpty() || wordCount <= 0) return 0
+        var count = 0
+        var wordsFound = 0
+        var i = text.length - 1
+        
+        while (i >= 0 && text[i].isWhitespace()) {
+            count++
+            i--
+        }
+        
+        while (i >= 0 && wordsFound < wordCount) {
+            while (i >= 0 && !text[i].isWhitespace()) {
+                count++
+                i--
+            }
+            wordsFound++
+            while (i >= 0 && text[i].isWhitespace()) {
+                count++
+                i--
+            }
+        }
+        return count
+    }
+
     override fun onCreate() {
         super.onCreate()
+        Log.d(TAG, "onCreate: Initializing VoiceInputIME service")
         savedStateRegistryController.performAttach()
         savedStateRegistryController.performRestore(null)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
@@ -65,6 +97,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
     }
 
     override fun onCreateInputView(): View {
+        Log.d(TAG, "onCreateInputView: Creating Compose input view")
         val composeView = ComposeView(this)
 
         // Set lifecycle and VM store owners on the Window DecorView for correct tree resolution
@@ -85,6 +118,36 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
                 apiKey = apiKey,
                 onBackspace = {
                     currentInputConnection?.deleteSurroundingText(1, 0)
+                },
+                onBackspaceSelect = { words ->
+                    val conn = currentInputConnection ?: return@IMEScreen
+                    if (initialCursorPos == -1) {
+                        val extracted = conn.getExtractedText(ExtractedTextRequest(), 0)
+                        initialCursorPos = extracted?.selectionStart ?: -1
+                    }
+                    val textBefore = conn.getTextBeforeCursor(300, 0)?.toString() ?: ""
+                    val lengthToSelect = getCharsForWords(textBefore, words)
+                    swipeSelectLength = lengthToSelect
+                    if (initialCursorPos != -1 && lengthToSelect > 0) {
+                        val start = (initialCursorPos - lengthToSelect).coerceAtLeast(0)
+                        conn.setSelection(start, initialCursorPos)
+                    }
+                },
+                onBackspaceDeleteSelected = {
+                    val conn = currentInputConnection
+                    if (conn != null && swipeSelectLength > 0) {
+                        conn.commitText("", 1)
+                    }
+                    initialCursorPos = -1
+                    swipeSelectLength = 0
+                },
+                onBackspaceCancelSelect = {
+                    val conn = currentInputConnection
+                    if (conn != null && initialCursorPos != -1) {
+                        conn.setSelection(initialCursorPos, initialCursorPos)
+                    }
+                    initialCursorPos = -1
+                    swipeSelectLength = 0
                 },
                 onSpace = {
                     currentInputConnection?.commitText(" ", 1)
@@ -114,6 +177,23 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
                     } else {
                         recordingState = RecordingState.IDLE
                     }
+                },
+                onDismiss = {
+                    requestHideSelf(0)
+                },
+                onSwitchKeyboard = {
+                    val token = window?.window?.attributes?.token
+                    if (token != null) {
+                        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                        try {
+                            imm.switchToNextInputMethod(token, false)
+                        } catch (e: Exception) {
+                            imm.showInputMethodPicker()
+                        }
+                    } else {
+                        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                        imm.showInputMethodPicker()
+                    }
                 }
             )
         }
@@ -122,6 +202,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        Log.d(TAG, "onStartInputView: Starting input view, restarting=$restarting, inputType=${info?.inputType}")
         // Refresh API Key from EncryptedSharedPreferences on open
         apiKey = SecurityUtils.getApiKey(this)
         recordingState = RecordingState.IDLE
