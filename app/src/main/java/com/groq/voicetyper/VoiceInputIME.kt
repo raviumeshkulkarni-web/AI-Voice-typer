@@ -56,6 +56,7 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
     // IME State
     private var apiKey by mutableStateOf<String?>(null)
     private var recordingState by mutableStateOf(RecordingState.IDLE)
+    private var isAgentMode by mutableStateOf(false)
     private var errorMessage by mutableStateOf<String?>(null)
     private val errorHandler = Handler(Looper.getMainLooper())
 
@@ -189,14 +190,17 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
                     swipeTextBefore = ""
                 },
                 recordingState = recordingState,
+                isAgentMode = isAgentMode,
                 errorMessage = errorMessage,
                 onCancelRecording = {
                     audioRecorder.cancelRecording()
                     recordingState = RecordingState.IDLE
+                    isAgentMode = false
                 },
-                onStartRecording = {
+                onStartRecording = { agentMode ->
                     errorMessage = null
                     recordingState = RecordingState.RECORDING
+                    isAgentMode = agentMode
                     audioRecorder.startRecording()
                 },
                 onStopRecording = {
@@ -326,22 +330,99 @@ class VoiceInputIME : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
         recordingState = RecordingState.TRANSCRIBING
 
         scope.launch {
-            val result = GroqClient.transcribe(key, file)
+            val languageCode = getKeyboardLanguageCode()
+            val result = GroqClient.transcribe(key, file, languageCode)
             result.fold(
                 onSuccess = { text ->
                     if (text.isNotBlank()) {
-                        currentInputConnection?.let { connection ->
-                            // Trim and insert with a clean trailing space for easy formatting
-                            val cleanText = text.trim()
-                            connection.commitText("$cleanText ", 1)
+                        if (isAgentMode) {
+                            val contextText = currentInputConnection?.getTextBeforeCursor(5000, 0)?.toString() ?: ""
+                            val cmdResult = CommandProcessor.processCommand(key, text, contextText)
+                            cmdResult.fold(
+                                onSuccess = { commandResult ->
+                                    executeCommandAction(commandResult, contextText)
+                                    recordingState = RecordingState.IDLE
+                                },
+                                onFailure = { error ->
+                                    showError(error.localizedMessage ?: "Agent processing failed")
+                                }
+                            )
+                        } else {
+                            currentInputConnection?.let { connection ->
+                                // Trim and insert with a clean trailing space for easy formatting
+                                val cleanText = text.trim()
+                                connection.commitText("$cleanText ", 1)
+                            }
+                            recordingState = RecordingState.IDLE
                         }
+                    } else {
+                        recordingState = RecordingState.IDLE
                     }
-                    recordingState = RecordingState.IDLE
+                    isAgentMode = false
                 },
                 onFailure = { error ->
                     showError(error.localizedMessage ?: "Transcription failed")
+                    isAgentMode = false
                 }
             )
+        }
+    }
+
+    private fun executeCommandAction(result: CommandResult, contextText: String) {
+        val conn = currentInputConnection ?: return
+        Log.d(TAG, "Executing IME command action: ${result.action}")
+        when (result.action) {
+            "DELETE_CHARS" -> {
+                if (result.deleteCount > 0) {
+                    conn.deleteSurroundingText(result.deleteCount, 0)
+                }
+            }
+            "REPLACE_TEXT" -> {
+                val charsToDelete = contextText.length
+                if (charsToDelete > 0) {
+                    conn.deleteSurroundingText(charsToDelete, 0)
+                }
+                conn.commitText(result.replacementText ?: "", 1)
+            }
+            "INSERT_TEXT" -> {
+                conn.commitText(result.insertionText ?: "", 1)
+            }
+            "SELECT_ALL" -> {
+                conn.performContextMenuAction(android.R.id.selectAll)
+            }
+            "MOVE_CURSOR" -> {
+                val textBefore = conn.getTextBeforeCursor(10000, 0)?.length ?: 0
+                val textAfter = conn.getTextAfterCursor(10000, 0)?.length ?: 0
+                val totalLength = textBefore + textAfter
+                val targetPos = if (result.cursorPosition?.equals("START", ignoreCase = true) == true) 0 else totalLength
+                conn.setSelection(targetPos, targetPos)
+            }
+            "SEND" -> {
+                val editorInfo = currentInputEditorInfo
+                if (editorInfo != null && editorInfo.actionId != 0) {
+                    conn.performEditorAction(editorInfo.actionId)
+                } else {
+                    conn.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+                    conn.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+                }
+            }
+        }
+    }
+
+    private fun getKeyboardLanguageCode(): String {
+        return try {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            val subtype = imm?.currentInputMethodSubtype
+            val tag = subtype?.languageTag
+            if (!tag.isNullOrBlank()) {
+                val lang = tag.split("-")[0].lowercase()
+                if (lang.length == 2) lang else "en"
+            } else {
+                val localeLang = java.util.Locale.getDefault().language
+                if (!localeLang.isNullOrBlank() && localeLang.length == 2) localeLang else "en"
+            }
+        } catch (e: Exception) {
+            "en"
         }
     }
 

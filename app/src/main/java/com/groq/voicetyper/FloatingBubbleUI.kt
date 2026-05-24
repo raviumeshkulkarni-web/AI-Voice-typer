@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.composed
 import kotlin.math.sin
@@ -44,6 +45,9 @@ fun FloatingBubbleUI(
     val recordingState by BubbleController.recordingState.collectAsState()
     val amplitude by BubbleController.amplitude.collectAsState()
     val errorMessage by BubbleController.errorMessage.collectAsState()
+    var lastTapTime by remember { mutableStateOf(0L) }
+    val coroutineScope = rememberCoroutineScope()
+    var pendingTapJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     // Notify parent window manager of size changes so position can be adjusted if on right side
     var previousExpanded by remember { mutableStateOf(isExpanded) }
@@ -88,10 +92,7 @@ fun FloatingBubbleUI(
                                 while (true) {
                                     val down = awaitFirstDown()
                                     val startPos = down.position
-                                    val startTime = System.currentTimeMillis()
                                     var isDragging = false
-                                    var isRecordingStarted = false
-                                    var holdTriggered = false
 
                                     do {
                                         val event = awaitPointerEvent()
@@ -101,7 +102,7 @@ fun FloatingBubbleUI(
                                             val currentPos = change.position
                                             val dragDistance = (currentPos - startPos).getDistance()
 
-                                            if (dragDistance > 8.dp.toPx() && !isRecordingStarted) {
+                                            if (dragDistance > 8.dp.toPx()) {
                                                 isDragging = true
                                             }
 
@@ -109,13 +110,6 @@ fun FloatingBubbleUI(
                                                 val dx = change.position.x - change.previousPosition.x
                                                 val dy = change.position.y - change.previousPosition.y
                                                 onDrag(dx, dy)
-                                            } else {
-                                                val elapsed = System.currentTimeMillis() - startTime
-                                                if (elapsed > 400 && !holdTriggered) {
-                                                    holdTriggered = true
-                                                    isRecordingStarted = true
-                                                    BubbleController.startRecording(context)
-                                                }
                                             }
                                             change.consume()
                                         } else {
@@ -124,13 +118,26 @@ fun FloatingBubbleUI(
                                     } while (true)
 
                                     if (isDragging) {
+                                        pendingTapJob?.cancel()
                                         onDragReleased()
                                     } else {
-                                        val elapsed = System.currentTimeMillis() - startTime
-                                        if (holdTriggered) {
+                                        val currentState = BubbleController.recordingState.value
+                                        if (currentState == RecordingState.RECORDING) {
                                             BubbleController.stopRecording(context)
-                                        } else if (elapsed < 400) {
-                                            BubbleController.startRecording(context)
+                                        } else if (currentState == RecordingState.IDLE || currentState == RecordingState.ERROR) {
+                                            val currentTime = System.currentTimeMillis()
+                                            if (currentTime - lastTapTime < 300) {
+                                                pendingTapJob?.cancel()
+                                                pendingTapJob = null
+                                                BubbleController.startRecording(context, agentMode = true)
+                                            } else {
+                                                pendingTapJob?.cancel()
+                                                pendingTapJob = coroutineScope.launch {
+                                                    kotlinx.coroutines.delay(250)
+                                                    BubbleController.startRecording(context, agentMode = false)
+                                                }
+                                            }
+                                            lastTapTime = currentTime
                                         }
                                     }
                                 }
@@ -215,11 +222,14 @@ fun FloatingBubbleUI(
                     }
 
                     // 3. Confirm Button (Right)
+                    val isAgentMode by BubbleController.isAgentMode.collectAsState()
+                    val confirmBgColor = if (isAgentMode) Color(0xFF00F5D4) else Color(0xFFA855F7)
+                    val confirmIconColor = if (isAgentMode) Color(0xFF0D0E12) else Color.White
                     IconButton(
                         onClick = { BubbleController.stopRecording(context) },
                         modifier = Modifier
                             .size(44.dp)
-                            .background(Color(0xFFA855F7), CircleShape)
+                            .background(confirmBgColor, CircleShape)
                     ) {
                         Canvas(modifier = Modifier.size(16.dp)) {
                             val w = size.width
@@ -231,7 +241,7 @@ fun FloatingBubbleUI(
                             }
                             drawPath(
                                 path = path,
-                                color = Color.White,
+                                color = confirmIconColor,
                                 style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
                             )
                         }
@@ -250,7 +260,9 @@ fun Modifier.amethystObsidianGlow(
     glowRadius: Dp = 8.dp,
     shape: RoundedCornerShape
 ): Modifier = this.composed {
-    val glowColor = Color(0xFFA855F7).copy(alpha = if (isExpanded) 0.65f else 0.45f)
+    val isAgentMode by BubbleController.isAgentMode.collectAsState()
+    val baseGlowColor = if (isAgentMode) Color(0xFF00F5D4) else Color(0xFFA855F7)
+    val glowColor = baseGlowColor.copy(alpha = if (isExpanded) 0.65f else 0.45f)
     
     val density = androidx.compose.ui.platform.LocalDensity.current
     val glowRadiusPx = with(density) { glowRadius.toPx() }
@@ -284,10 +296,17 @@ fun Modifier.amethystObsidianGlow(
     .border(
         width = 1.2.dp,
         brush = Brush.linearGradient(
-            colors = listOf(
-                Color(0xFFA855F7), // Amethyst Glow
-                Color(0xFF6366F1).copy(alpha = 0.5f) // Deep Indigo accent
-            )
+            colors = if (isAgentMode) {
+                listOf(
+                    Color(0xFF00F5D4),
+                    Color(0xFF00BBF9).copy(alpha = 0.5f)
+                )
+            } else {
+                listOf(
+                    Color(0xFFA855F7), // Amethyst Glow
+                    Color(0xFF6366F1).copy(alpha = 0.5f) // Deep Indigo accent
+                )
+            }
         ),
         shape = shape
     )
@@ -401,6 +420,11 @@ fun MiniFluenceOrb() {
  */
 @Composable
 fun SiriWaveform(amplitude: Float) {
+    val isAgentMode by BubbleController.isAgentMode.collectAsState()
+    val wave1Color = if (isAgentMode) Color(0xFF00BBF9).copy(alpha = 0.45f) else Color(0xFF6366F1).copy(alpha = 0.45f)
+    val wave2Color = if (isAgentMode) Color(0xFF00F5D4).copy(alpha = 0.65f) else Color(0xFFA855F7).copy(alpha = 0.65f)
+    val wave3Color = Color.White.copy(alpha = 0.95f)
+
     val infiniteTransition = rememberInfiniteTransition(label = "siri_waves")
     val phase1 by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -429,7 +453,7 @@ fun SiriWaveform(amplitude: Float) {
         // Determine actual height amplitude (minimum idle height of 0.1f so waves always move slightly)
         val activeAmplitude = (amplitude.coerceIn(0f, 1f) * 0.85f + 0.15f) * (height * 0.35f)
 
-        // Wave 1: Deep Indigo (Background)
+        // Wave 1: Deep Indigo / Cyan-Blue (Background)
         val path1 = Path()
         path1.moveTo(0f, centerY)
         for (x in 0..width.toInt() step 4) {
@@ -440,11 +464,11 @@ fun SiriWaveform(amplitude: Float) {
         }
         drawPath(
             path = path1,
-            color = Color(0xFF6366F1).copy(alpha = 0.45f),
+            color = wave1Color,
             style = Stroke(width = 2.dp.toPx())
         )
 
-        // Wave 2: Amethyst (Middle)
+        // Wave 2: Amethyst / Teal (Middle)
         val path2 = Path()
         path2.moveTo(0f, centerY)
         for (x in 0..width.toInt() step 4) {
@@ -455,7 +479,7 @@ fun SiriWaveform(amplitude: Float) {
         }
         drawPath(
             path = path2,
-            color = Color(0xFFA855F7).copy(alpha = 0.65f),
+            color = wave2Color,
             style = Stroke(width = 2.5.dp.toPx())
         )
 
@@ -470,7 +494,7 @@ fun SiriWaveform(amplitude: Float) {
         }
         drawPath(
             path = path3,
-            color = Color.White.copy(alpha = 0.95f),
+            color = wave3Color,
             style = Stroke(width = 3.dp.toPx())
         )
     }

@@ -37,6 +37,11 @@
 # Keep SecurityUtils since it's accessed across processes
 -keep class com.groq.voicetyper.SecurityUtils { *; }
 
+# Keep Agent Mode command processor (used by VoiceInputIME and BubbleController)
+-keep class com.groq.voicetyper.CommandProcessor { *; }
+-keep class com.groq.voicetyper.CommandResult { *; }
+
+
 # --- General ---
 # Keep annotations
 -keepattributes *Annotation*

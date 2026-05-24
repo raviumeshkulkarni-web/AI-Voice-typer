@@ -76,9 +76,10 @@ fun IMEScreen(
     onBackspaceDeleteSelected: () -> Unit = {},
     onBackspaceCancelSelect: () -> Unit = {},
     recordingState: RecordingState,
+    isAgentMode: Boolean = false,
     errorMessage: String?,
     onCancelRecording: () -> Unit,
-    onStartRecording: () -> Unit,
+    onStartRecording: (Boolean) -> Unit,
     onStopRecording: () -> Unit,
     onSwitchKeyboard: () -> Unit
 ) {
@@ -103,7 +104,6 @@ fun IMEScreen(
     val currentRecordingState by rememberUpdatedState(recordingState)
     val currentOnStartRecording by rememberUpdatedState(onStartRecording)
     val currentOnStopRecording by rememberUpdatedState(onStopRecording)
-    val currentOnCancelRecording by rememberUpdatedState(onCancelRecording)
 
     // Infinite transitions for smooth animations
     val infiniteTransition = rememberInfiniteTransition(label = "aura")
@@ -131,29 +131,29 @@ fun IMEScreen(
 
     // Color definitions from Stitch designs
     val micBgColor = when (recordingState) {
-        RecordingState.RECORDING -> Color(0xFFA855F7) // Amethyst Violet
+        RecordingState.RECORDING -> if (isAgentMode) Color(0xFF00F5D4) else Color(0xFFA855F7) // Teal vs Amethyst Violet
         RecordingState.TRANSCRIBING -> Color(0xFF1E1F23) // Dark Grey
         RecordingState.ERROR -> Color(0xFFFF5252) // Error Red
         RecordingState.IDLE -> if (isEnabled) Color(0xFFE3E2E7) else Color(0xFF474649)
     }
 
     val micIconColor = when (recordingState) {
-        RecordingState.RECORDING -> Color(0xFF1B1B21) // Dark Amethyst Contrast
+        RecordingState.RECORDING -> if (isAgentMode) Color(0xFF0D0E12) else Color(0xFF1B1B21) // Dark contrast
         RecordingState.TRANSCRIBING -> Color.White
         RecordingState.ERROR -> Color.White
         RecordingState.IDLE -> Color(0xFF121317)
     }
 
     val statusTextColor = when (recordingState) {
-        RecordingState.RECORDING -> Color(0xFFA855F7) // Amethyst Violet
-        RecordingState.TRANSCRIBING -> Color(0xFFD18CFF)
+        RecordingState.RECORDING -> if (isAgentMode) Color(0xFF00F5D4) else Color(0xFFA855F7)
+        RecordingState.TRANSCRIBING -> if (isAgentMode) Color(0xFF80FFE8) else Color(0xFFD18CFF)
         RecordingState.ERROR -> Color(0xFFFF5252)
         RecordingState.IDLE -> Color(0xFFE3E2E7)
     }
 
     val statusText = when (recordingState) {
         RecordingState.IDLE -> if (apiKey.isNullOrBlank()) "API KEY REQUIRED" else "Ready"
-        RecordingState.RECORDING -> "Listening... ($timeText)"
+        RecordingState.RECORDING -> if (isAgentMode) "AI Command Mode... ($timeText)" else "Listening... ($timeText)"
         RecordingState.TRANSCRIBING -> "Transcribing..."
         RecordingState.ERROR -> errorMessage ?: "ERROR"
     }
@@ -205,7 +205,8 @@ fun IMEScreen(
                 .size(width = 240.dp, height = 64.dp)
                 .drawBehind {
                     val isListening = recordingState == RecordingState.RECORDING
-                    val glowColor = Color(0xFFA855F7).copy(alpha = if (isListening) 0.65f else 0.45f)
+                    val baseGlowColor = if (isAgentMode) Color(0xFF00F5D4) else Color(0xFFA855F7)
+                    val glowColor = baseGlowColor.copy(alpha = if (isListening) 0.65f else 0.45f)
                     val shapeRadiusPx = 32.dp.toPx()
 
                     drawIntoCanvas { canvas ->
@@ -223,10 +224,17 @@ fun IMEScreen(
                 .border(
                     width = 1.2.dp,
                     brush = Brush.linearGradient(
-                        colors = listOf(
-                            Color(0xFFA855F7),
-                            Color(0xFF6366F1).copy(alpha = 0.5f)
-                        )
+                        colors = if (isAgentMode) {
+                            listOf(
+                                Color(0xFF00F5D4),
+                                Color(0xFF00BBF9).copy(alpha = 0.5f)
+                            )
+                        } else {
+                            listOf(
+                                Color(0xFFA855F7),
+                                Color(0xFF6366F1).copy(alpha = 0.5f)
+                            )
+                        }
                     ),
                     shape = RoundedCornerShape(32.dp)
                 )
@@ -283,7 +291,7 @@ fun IMEScreen(
                             .scale(pingScale)
                     ) {
                         drawCircle(
-                            color = Color(0xFFA855F7).copy(alpha = pingAlpha),
+                            color = (if (isAgentMode) Color(0xFF00F5D4) else Color(0xFFA855F7)).copy(alpha = pingAlpha),
                             radius = size.minDimension / 2,
                             style = Stroke(width = 1.5.dp.toPx())
                         )
@@ -309,19 +317,16 @@ fun IMEScreen(
                                     onPress = {
                                         if (currentRecordingState == RecordingState.RECORDING) {
                                             currentOnStopRecording()
-                                            return@detectTapGestures
                                         }
-
-                                        currentOnStartRecording()
-                                        val startTime = System.currentTimeMillis()
-                                        val released = tryAwaitRelease()
-                                        if (released) {
-                                            val duration = System.currentTimeMillis() - startTime
-                                            if (duration > 500) {
-                                                currentOnStopRecording()
-                                            }
-                                        } else {
-                                            currentOnCancelRecording()
+                                    },
+                                    onTap = {
+                                        if (currentRecordingState == RecordingState.IDLE || currentRecordingState == RecordingState.ERROR) {
+                                            currentOnStartRecording(false)
+                                        }
+                                    },
+                                    onDoubleTap = {
+                                        if (currentRecordingState == RecordingState.IDLE || currentRecordingState == RecordingState.ERROR) {
+                                            currentOnStartRecording(true)
                                         }
                                     }
                                 )

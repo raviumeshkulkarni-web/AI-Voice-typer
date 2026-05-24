@@ -1,5 +1,7 @@
 package com.groq.voicetyper
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -27,6 +29,9 @@ object BubbleController {
 
     private val _recordingState = MutableStateFlow(RecordingState.IDLE)
     val recordingState: StateFlow<RecordingState> = _recordingState.asStateFlow()
+
+    private val _isAgentMode = MutableStateFlow(false)
+    val isAgentMode: StateFlow<Boolean> = _isAgentMode.asStateFlow()
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
@@ -100,6 +105,7 @@ object BubbleController {
         }
         _isBubbleVisible.value = false
         _isBubbleExpanded.value = false
+        _isAgentMode.value = false
         @Suppress("DEPRECATION")
         synchronized(nodeLock) {
             activeNode?.recycle()
@@ -120,9 +126,10 @@ object BubbleController {
         }
     }
 
-    fun startRecording(context: Context) {
+    fun startRecording(context: Context, agentMode: Boolean = false) {
         initRecorder(context)
         _errorMessage.value = null
+        _isAgentMode.value = agentMode
         _recordingState.value = RecordingState.RECORDING
         _isBubbleExpanded.value = true
         audioRecorder?.startRecording()
@@ -143,6 +150,7 @@ object BubbleController {
         audioRecorder?.cancelRecording()
         _recordingState.value = RecordingState.IDLE
         _isBubbleExpanded.value = false
+        _isAgentMode.value = false
     }
 
     private fun transcribeAudio(context: Context, file: File) {
@@ -156,19 +164,121 @@ object BubbleController {
         _recordingState.value = RecordingState.TRANSCRIBING
 
         scope.launch {
-            val result = GroqClient.transcribe(apiKey, file)
+            val languageCode = getKeyboardLanguageCode(context)
+            val result = GroqClient.transcribe(apiKey, file, languageCode)
             result.fold(
                 onSuccess = { text ->
                     if (text.isNotBlank()) {
-                        injectText(text)
+                        if (_isAgentMode.value) {
+                            processAgentCommand(context, apiKey, text)
+                        } else {
+                            injectText(context, text)
+                            _recordingState.value = RecordingState.IDLE
+                            _isBubbleExpanded.value = false
+                        }
+                    } else {
+                        _recordingState.value = RecordingState.IDLE
+                        _isBubbleExpanded.value = false
                     }
-                    _recordingState.value = RecordingState.IDLE
-                    _isBubbleExpanded.value = false
+                    _isAgentMode.value = false
                 },
                 onFailure = { error ->
                     showError(error.localizedMessage ?: "Transcription failed")
+                    _isAgentMode.value = false
                 }
             )
+        }
+    }
+
+    private fun getKeyboardLanguageCode(context: Context): String {
+        return try {
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+            val subtype = imm?.currentInputMethodSubtype
+            val tag = subtype?.languageTag
+            if (!tag.isNullOrBlank()) {
+                val lang = tag.split("-")[0].lowercase()
+                if (lang.length == 2) lang else "en"
+            } else {
+                val localeLang = java.util.Locale.getDefault().language
+                if (!localeLang.isNullOrBlank() && localeLang.length == 2) localeLang else "en"
+            }
+        } catch (e: Exception) {
+            "en"
+        }
+    }
+
+    private suspend fun processAgentCommand(context: Context, apiKey: String, commandText: String) {
+        val contextText = synchronized(nodeLock) {
+            val node = activeNode
+            if (node != null) {
+                try { node.refresh() } catch (_: Exception) {}
+                if (node.isShowingHintText) {
+                    ""
+                } else {
+                    val fullText = node.text?.toString() ?: ""
+                    val selectionStart = node.textSelectionStart
+                    val beforeCursorText = if (selectionStart in 0..fullText.length) {
+                        fullText.substring(0, selectionStart)
+                    } else {
+                        fullText
+                    }
+                    if (beforeCursorText.length > 5000) {
+                        beforeCursorText.substring(beforeCursorText.length - 5000)
+                    } else {
+                        beforeCursorText
+                    }
+                }
+            } else ""
+        }
+        val contextTextLength = contextText.length
+
+        val result = CommandProcessor.processCommand(apiKey, commandText, contextText)
+        result.fold(
+            onSuccess = { commandResult ->
+                mainHandler.post {
+                    executeCommandAction(context, commandResult, contextTextLength)
+                    _recordingState.value = RecordingState.IDLE
+                    _isBubbleExpanded.value = false
+                }
+            },
+            onFailure = { error ->
+                mainHandler.post {
+                    showError(error.localizedMessage ?: "Command processing failed")
+                }
+            }
+        )
+    }
+
+    private fun executeCommandAction(context: Context, result: CommandResult, contextTextLength: Int) {
+        Log.d(TAG, "Executing command action: ${result.action}")
+        when (result.action) {
+            "DELETE_CHARS" -> {
+                performDeleteChars(result.deleteCount)
+            }
+            "REPLACE_TEXT" -> {
+                result.replacementText?.let { performReplaceText(context, it, contextTextLength) }
+            }
+            "INSERT_TEXT" -> {
+                result.insertionText?.let { injectText(context, it) }
+            }
+            "SELECT_ALL" -> {
+                performSelectAll()
+            }
+            "MOVE_CURSOR" -> {
+                result.cursorPosition?.let { performMoveCursor(it) }
+            }
+            "SEND" -> {
+                val node = synchronized(nodeLock) { activeNode } ?: return
+                val actions = node.actionList
+                if (actions != null) {
+                    for (action in actions) {
+                        if (action.id == AccessibilityNodeInfo.ACTION_CLICK) {
+                            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            break
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -187,10 +297,53 @@ object BubbleController {
         }, 4000)
     }
 
+    private fun restoreClipboard(clipboard: ClipboardManager, originalClip: android.content.ClipData?) {
+        try {
+            if (originalClip != null) {
+                clipboard.setPrimaryClip(originalClip)
+            } else {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    clipboard.clearPrimaryClip()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore clipboard", e)
+        }
+    }
+
+    private fun pasteTextViaClipboard(context: Context, node: AccessibilityNodeInfo, textToPaste: String, fallback: () -> Unit) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: run {
+            fallback()
+            return
+        }
+        
+        try {
+            val primaryClip = clipboard.primaryClip
+            clipboard.setPrimaryClip(ClipData.newPlainText("voice_input", textToPaste))
+            val success = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            if (!success) {
+                Log.w(TAG, "ACTION_PASTE returned false, restoring clipboard and running fallback")
+                restoreClipboard(clipboard, primaryClip)
+                fallback()
+                return
+            }
+            
+            // Only schedule delayed restore when paste succeeded —
+            // gives the target app time to process the paste IPC before we swap the clipboard back.
+            scope.launch(Dispatchers.Main) {
+                kotlinx.coroutines.delay(200)
+                restoreClipboard(clipboard, primaryClip)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in pasteTextViaClipboard", e)
+            fallback()
+        }
+    }
+
     /**
      * Injects text into the active node at the current cursor position.
      */
-    fun injectText(text: String) {
+    fun injectText(context: Context, text: String) {
         val node = synchronized(nodeLock) { activeNode } ?: return
 
         // Attempt to refresh the node to get up-to-date text/cursor state.
@@ -206,38 +359,156 @@ object BubbleController {
         val selectionEnd = if (node.isShowingHintText) 0 else node.textSelectionEnd
         val textToInsert = "${text.trim()} "
 
-        val bundle = Bundle()
         if (selectionStart >= 0 && selectionEnd >= 0) {
-            val newText = StringBuilder(currentText)
-                .replace(selectionStart, selectionEnd, textToInsert)
-                .toString()
+            val selectBundle = Bundle()
+            selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, selectionStart)
+            selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, selectionEnd)
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectBundle)
+            
+            pasteTextViaClipboard(context, node, textToInsert) {
+                val newText = StringBuilder(currentText)
+                    .replace(selectionStart, selectionEnd, textToInsert)
+                    .toString()
+                val bundle = Bundle()
+                bundle.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
+                val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+                if (success) {
+                    val newCursorPos = selectionStart + textToInsert.length
+                    val selectBundle2 = Bundle()
+                    selectBundle2.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newCursorPos)
+                    selectBundle2.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newCursorPos)
+                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectBundle2)
+                }
+            }
+        } else {
+            pasteTextViaClipboard(context, node, textToInsert) {
+                val newText = currentText.toString() + textToInsert
+                val bundle = Bundle()
+                bundle.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
+                node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+            }
+        }
+    }
+
+    fun performReplaceText(context: Context, newText: String, contextTextLength: Int) {
+        val node = synchronized(nodeLock) { activeNode } ?: return
+        try { node.refresh() } catch (_: Exception) {}
+        
+        val currentText = node.text ?: ""
+        val selectionStart = node.textSelectionStart
+        val selectionEnd = node.textSelectionEnd
+        
+        if (selectionStart >= 0 && selectionStart == selectionEnd) {
+            val startPos = maxOf(0, selectionStart - contextTextLength)
+            val selectBundle = Bundle()
+            selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, startPos)
+            selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, selectionStart)
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectBundle)
+            
+            pasteTextViaClipboard(context, node, newText) {
+                val replacedText = StringBuilder(currentText)
+                    .replace(startPos, selectionStart, newText)
+                    .toString()
+                val bundle = Bundle()
+                bundle.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, replacedText)
+                val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+                if (success) {
+                    val newCursorPos = startPos + newText.length
+                    val selectBundle2 = Bundle()
+                    selectBundle2.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newCursorPos)
+                    selectBundle2.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newCursorPos)
+                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectBundle2)
+                }
+            }
+        } else {
+            // Fallback: replace everything
+            val textLength = currentText.length
+            val selectBundle = Bundle()
+            selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+            selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, textLength)
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectBundle)
+            
+            pasteTextViaClipboard(context, node, newText) {
+                val bundle = Bundle()
+                bundle.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
+                val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+                if (success) {
+                    val selectBundle2 = Bundle()
+                    selectBundle2.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newText.length)
+                    selectBundle2.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newText.length)
+                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectBundle2)
+                }
+            }
+        }
+    }
+
+    fun performSelectAll() {
+        val node = synchronized(nodeLock) { activeNode } ?: return
+        try { node.refresh() } catch (_: Exception) {}
+        val textLength = node.text?.length ?: 0
+        val selectBundle = Bundle()
+        selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+        selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, textLength)
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectBundle)
+    }
+
+    fun performMoveCursor(position: String) {
+        val node = synchronized(nodeLock) { activeNode } ?: return
+        try { node.refresh() } catch (_: Exception) {}
+        val textLength = node.text?.length ?: 0
+        val targetPos = if (position.equals("START", ignoreCase = true)) 0 else textLength
+        val selectBundle = Bundle()
+        selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, targetPos)
+        selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, targetPos)
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectBundle)
+    }
+
+    fun performDeleteChars(count: Int) {
+        val node = synchronized(nodeLock) { activeNode } ?: return
+        try { node.refresh() } catch (_: Exception) {}
+        if (node.isShowingHintText || count <= 0) return
+
+        val currentText = node.text ?: ""
+        val selectionStart = node.textSelectionStart
+        val selectionEnd = node.textSelectionEnd
+
+        // Deletion uses ACTION_SET_TEXT directly (not clipboard-paste with empty string)
+        // because shortening text via SET_TEXT is reliable across all OEMs, and apps
+        // will still see the text change and persist it.
+        if (selectionStart >= count && selectionStart == selectionEnd) {
+            val newText = StringBuilder(currentText).delete(selectionStart - count, selectionStart).toString()
+            val bundle = Bundle()
             bundle.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
             val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
             if (success) {
-                val newCursorPos = selectionStart + textToInsert.length
+                val newCursorPos = selectionStart - count
                 val selectBundle = Bundle()
                 selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newCursorPos)
                 selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newCursorPos)
                 node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectBundle)
-            } else {
-                Log.w(TAG, "ACTION_SET_TEXT failed — trying append fallback")
-                val appendBundle = Bundle()
-                appendBundle.putCharSequence(
-                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                    currentText.toString() + textToInsert
-                )
-                node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, appendBundle)
             }
         } else {
-            // Fallback: Append text
-            val newText = currentText.toString() + textToInsert
-            bundle.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
-            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+            // Fallback to end of text deletion if cursor position is invalid/unset
+            val textLength = currentText.length
+            if (textLength >= count) {
+                val newText = StringBuilder(currentText).delete(textLength - count, textLength).toString()
+                val bundle = Bundle()
+                bundle.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
+                val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+                if (success) {
+                    val newCursorPos = textLength - count
+                    val selectBundle = Bundle()
+                    selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newCursorPos)
+                    selectBundle.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newCursorPos)
+                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectBundle)
+                }
+            }
         }
     }
 
     /**
      * Deletes one character (or selection) before the cursor.
+     * Uses ACTION_SET_TEXT directly — reliable for shortening text across all OEMs.
      */
     fun performBackspace() {
         val node = synchronized(nodeLock) { activeNode } ?: return
@@ -251,9 +522,9 @@ object BubbleController {
         val selectionStart = node.textSelectionStart
         val selectionEnd = node.textSelectionEnd
 
-        val bundle = Bundle()
         if (selectionStart > 0 && selectionStart == selectionEnd) {
             val newText = StringBuilder(currentText).deleteAt(selectionStart - 1).toString()
+            val bundle = Bundle()
             bundle.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
             val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
             if (success) {
@@ -265,6 +536,7 @@ object BubbleController {
             }
         } else if (selectionStart >= 0 && selectionEnd > selectionStart) {
             val newText = StringBuilder(currentText).delete(selectionStart, selectionEnd).toString()
+            val bundle = Bundle()
             bundle.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
             val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
             if (success) {

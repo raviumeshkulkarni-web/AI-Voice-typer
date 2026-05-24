@@ -126,7 +126,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
             width = WindowManager.LayoutParams.WRAP_CONTENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
             gravity = Gravity.TOP or Gravity.START
-            x = -padding
+            x = resources.displayMetrics.widthPixels - collapsedSize - padding
             y = resources.displayMetrics.heightPixels / 3 - padding
         }
 
