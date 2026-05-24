@@ -59,7 +59,7 @@ Built for users who refuse to compromise on data security:
 
 ## 🛠️ Core Features
 
-* **WisprFlow-Style Floating Bubble:** A sleek, glassmorphic bubble overlay that follows your focus. Tap to speak, or hold to talk and release to instantly transcribe.
+* **Floating Bubble for easy access:** A sleek, glassmorphic bubble overlay that follows your focus. Tap to speak, or hold to talk and release to instantly transcribe.
 * **Multi-Window Focus Engine:** Custom Accessibility Service checks active native app windows and nested WebViews (like Brave and Chrome) to ensure the bubble appears next to any editable input.
 * **Ultra-Low Latency:** Transcribes sentences in under `0.5s–1s` via Groq LPU API.
 * **Intelligent Text Injection:** Fallback mechanics inject text at the current cursor position, falling back to appending if standard cursor focus is blocked.
