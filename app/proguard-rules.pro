@@ -30,16 +30,8 @@
 -keep class androidx.compose.runtime.** { *; }
 
 # --- App classes ---
-# Keep the IME service (referenced by manifest)
--keep class com.groq.voicetyper.VoiceInputIME { *; }
--keep class com.groq.voicetyper.MainActivity { *; }
-
-# Keep SecurityUtils since it's accessed across processes
--keep class com.groq.voicetyper.SecurityUtils { *; }
-
-# Keep Agent Mode command processor (used by VoiceInputIME and BubbleController)
--keep class com.groq.voicetyper.CommandProcessor { *; }
--keep class com.groq.voicetyper.CommandResult { *; }
+# Keep all application classes to prevent R8 from breaking services and Compose overlays
+-keep class com.groq.voicetyper.** { *; }
 
 
 # --- General ---
