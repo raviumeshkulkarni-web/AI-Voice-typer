@@ -8,9 +8,9 @@
 [![Platform](https://img.shields.io/badge/Platform-Android%20API%2026%2B-brightgreen.svg)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.23-orange.svg)](https://kotlinlang.org)
 
-**AI-powered voice typing system-wide on Android, right at your cursor.**
+**An AI powered voice typing system wide on Android, right at your cursor.**
 
-Fluence is a lightweight, premium, and privacy-focused Android voice typing system powered by the ultra-fast **Groq Whisper API (`whisper-large-v3`)**. Instead of forcing you to use a custom software keyboard, Fluence overlays a smart, WisprFlow-style floating bubble that automatically appears next to any text field when you focus it—whether you're browsing the web in **Brave/Chrome** or typing a message in a native messaging app.
+Fluence is a lightweight, premium, and privacy-focused Android voice typing system powered by the ultra-fast **Groq Whisper API (`whisper-large-v3`)**. Instead of forcing you to use a custom software keyboard, Fluence overlays a smart, floating bubble that automatically appears next to any text field when you focus it, whether you're browsing the web in **Brave/Chrome** or typing a message in a native messaging app.
 
 ---
 
