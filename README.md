@@ -2,8 +2,8 @@
 
 **AI-powered voice typing system-wide on Android, right at your cursor.**
 
-[![Build Android APK](https://github.com/raviumeshkulkarni-web/AI-Voice-typer/actions/workflows/build.yml/badge.svg)](https://github.com/raviumeshkulkarni-web/AI-Voice-typer/actions/workflows/build.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/raviumeshkulkarni-web/AI-Voice-typer?color=blue)](https://github.com/raviumeshkulkarni-web/AI-Voice-typer/releases)
+[![Build Android APK](https://github.com/raviumeshkulkarni-web/Fluence/actions/workflows/build.yml/badge.svg)](https://github.com/raviumeshkulkarni-web/Fluence/actions/workflows/build.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/raviumeshkulkarni-web/Fluence?color=blue)](https://github.com/raviumeshkulkarni-web/Fluence/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Platform](https://img.shields.io/badge/Platform-Android%20API%2026%2B-brightgreen.svg)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.23-orange.svg)](https://kotlinlang.org)
@@ -15,7 +15,7 @@ Fluence is a lightweight, premium, and privacy-focused Android voice typing syst
 ## 🎬 Watch It In Action
 
 <p align="center">
-  <video src="https://github.com/raviumeshkulkarni-web/AI-Voice-typer/raw/main/docs/assets/fluence_demo.mp4" width="320px" autoplay loop muted playsinline></video>
+  <video src="https://github.com/raviumeshkulkarni-web/Fluence/raw/main/docs/assets/fluence_demo.mp4" width="320px" autoplay loop muted playsinline></video>
 </p>
 
 ---
@@ -100,14 +100,14 @@ sequenceDiagram
 ## 🚀 Installation & Setup
 
 ### Option A: Download Pre-compiled APK (Recommended)
-1. Head to the [Releases](https://github.com/raviumeshkulkarni-web/AI-Voice-typer/releases) page.
+1. Head to the [Releases](https://github.com/raviumeshkulkarni-web/Fluence/releases) page.
 2. Download `app-release.apk` from the latest release.
 3. Open the downloaded file to install (grant permission to "Install from Unknown Sources" if prompted).
 
 ### Option B: Build from Source
 1. Clone the repository:
    ```bash
-   git clone https://github.com/raviumeshkulkarni-web/AI-Voice-typer.git
+   git clone https://github.com/raviumeshkulkarni-web/Fluence.git
    ```
 2. Open the project in **Android Studio** (Koala or newer).
 3. Connect your device (with USB debugging enabled) and click **Run**.
