@@ -120,7 +120,8 @@ object CommandProcessor {
                         insertionText = insertionText,
                         cursorPosition = cursorPosition
                     )
-                    Result.success(result)
+                    val validatedResult = validateCommandResult(result, contextText.length)
+                    Result.success(validatedResult)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to parse chat response: $bodyString", e)
                     Result.failure(Exception("Failed to parse command response"))
@@ -132,6 +133,57 @@ object CommandProcessor {
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error", e)
             Result.failure(Exception(e.localizedMessage ?: "Unexpected error during command processing"))
+        }
+    }
+
+    internal fun validateCommandResult(result: CommandResult, contextLength: Int): CommandResult {
+        val allowedActions = setOf("DELETE_CHARS", "REPLACE_TEXT", "INSERT_TEXT", "SELECT_ALL", "MOVE_CURSOR", "SEND")
+        
+        // 1. Validate action
+        if (result.action !in allowedActions) {
+            Log.w(TAG, "validateCommandResult: Invalid action '${result.action}'. Falling back to safe INSERT_TEXT.")
+            return CommandResult(
+                action = "INSERT_TEXT",
+                insertionText = result.insertionText ?: ""
+            )
+        }
+
+        // 2. Validate parameters and clamp bounds
+        return when (result.action) {
+            "DELETE_CHARS" -> {
+                val maxDelete = minOf(1000, maxOf(0, contextLength))
+                val validatedCount = result.deleteCount.coerceIn(0, maxDelete)
+                result.copy(deleteCount = validatedCount)
+            }
+            "REPLACE_TEXT" -> {
+                if (result.replacementText == null) {
+                    Log.w(TAG, "validateCommandResult: REPLACE_TEXT action missing replacement_text. Falling back to safe IDLE.")
+                    CommandResult(action = "IDLE")
+                } else {
+                    val validatedText = if (result.replacementText.length > 5000) {
+                        result.replacementText.substring(0, 5000)
+                    } else result.replacementText
+                    result.copy(replacementText = validatedText)
+                }
+            }
+            "INSERT_TEXT" -> {
+                if (result.insertionText == null) {
+                    Log.w(TAG, "validateCommandResult: INSERT_TEXT action missing insertion_text. Falling back to safe IDLE.")
+                    CommandResult(action = "IDLE")
+                } else {
+                    val validatedText = if (result.insertionText.length > 5000) {
+                        result.insertionText.substring(0, 5000)
+                    } else result.insertionText
+                    result.copy(insertionText = validatedText)
+                }
+            }
+            "MOVE_CURSOR" -> {
+                val allowedPositions = setOf("START", "END")
+                val normalizedPos = result.cursorPosition?.uppercase() ?: "END"
+                val validatedPos = if (normalizedPos in allowedPositions) normalizedPos else "END"
+                result.copy(cursorPosition = validatedPos)
+            }
+            else -> result // SELECT_ALL, SEND need no extra validation
         }
     }
 

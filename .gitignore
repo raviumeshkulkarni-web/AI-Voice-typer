@@ -14,3 +14,13 @@ captures/
 .externalNativeBuild
 .cxx
 local.properties
+
+# Release & build artifacts
+*.apk
+*.idsig
+
+# Local JSON run reports
+runs.json
+run_detail.json
+release.json
+jobs.json
