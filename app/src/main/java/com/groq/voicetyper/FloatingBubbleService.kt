@@ -127,9 +127,10 @@ class FloatingBubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
             width = WindowManager.LayoutParams.WRAP_CONTENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
             gravity = Gravity.TOP or Gravity.START
-            x = resources.displayMetrics.widthPixels - collapsedSize - padding
-            y = resources.displayMetrics.heightPixels / 3 - padding
+            x = lastX ?: (resources.displayMetrics.widthPixels - collapsedSize - padding)
+            y = lastY ?: (resources.displayMetrics.heightPixels / 3 - padding)
         }
+        isAnchoredRight = lastIsAnchoredRight
 
         val view = ComposeView(this).apply {
             setViewCompositionStrategy(
@@ -148,6 +149,8 @@ class FloatingBubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                         val lp = this@FloatingBubbleService.layoutParams
                         lp.x = (lp.x + dx.toInt()).coerceIn(-padding, screenWidth - collapsedSize - padding)
                         lp.y = (lp.y + dy.toInt()).coerceIn(-padding, screenHeight - collapsedSize - padding)
+                        lastX = lp.x
+                        lastY = lp.y
                         if (isViewAdded && composeView != null && composeView!!.isAttachedToWindow) {
                             windowManager.updateViewLayout(composeView, lp)
                         }
@@ -157,6 +160,7 @@ class FloatingBubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
                         val lp = this@FloatingBubbleService.layoutParams
                         val isLeft = (lp.x + padding) + collapsedSize / 2 < screenWidth / 2
                         isAnchoredRight = !isLeft
+                        lastIsAnchoredRight = isAnchoredRight
                         val targetX = if (isLeft) -padding else screenWidth - collapsedSize - padding
                         animateSnap(targetX)
                     },
@@ -200,7 +204,9 @@ class FloatingBubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
         animator.duration = 350
         animator.interpolator = android.view.animation.DecelerateInterpolator()
         animator.addUpdateListener { animation ->
-            layoutParams.x = animation.animatedValue as Int
+            val currX = animation.animatedValue as Int
+            layoutParams.x = currX
+            lastX = currX
             composeView?.let {
                 if (isViewAdded && it.isAttachedToWindow) {
                     windowManager.updateViewLayout(it, layoutParams)
@@ -230,5 +236,10 @@ class FloatingBubbleService : Service(), LifecycleOwner, ViewModelStoreOwner, Sa
 
     companion object {
         private const val NOTIFICATION_ID = 2026
+        
+        // Static variables to persist the bubble's coordinates and side anchoring across show/hide events
+        private var lastX: Int? = null
+        private var lastY: Int? = null
+        private var lastIsAnchoredRight: Boolean = true
     }
 }
